@@ -1,36 +1,9 @@
-# --- Find and Replace Handler ---
+import re # Moved import to top
 from docx import Document
 from docx.shared import Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH # Already here, good.
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-def apply_find_and_replace_action(doc: Document, elements_details: list, action: dict):
-    """
-    Finds all occurrences of a word/phrase and replaces it with the given replacement.
-    Action: {"action": "find_and_replace", "find": "business", "replace_with": "<s>business</s>"}
-    """
-    print(f"Applying find_and_replace action: {action}")
-    find_text = action.get("find")
-    replace_with = action.get("replace_with")
-    if not find_text or replace_with is None:
-        print("Warning: 'find' or 'replace_with' not provided for find_and_replace. Skipping.")
-        return
-    replaced_count = 0
-    import re
-    for para in doc.paragraphs:
-        for run in para.runs:
-            if find_text.lower() in run.text.lower():
-                # Replace all occurrences, case-insensitive
-                new_text = run.text
-                # Do a case-insensitive replace
-                pattern = re.compile(re.escape(find_text), re.IGNORECASE)
-                new_text, n = pattern.subn(replace_with, new_text)
-                if n > 0:
-                    run.text = new_text
-                    replaced_count += n
-    print(f"Applied find_and_replace to {replaced_count} occurrences of '{find_text}'.")
-
-# Ensure it's available for the functions in this file too.
-# It seems it was already imported, so the issue might be elsewhere or this is just a check.
+# --- Document Load/Save Utilities ---
 
 def load_document(file_path: str) -> Document:
     """Loads a .docx document from the given file path."""
@@ -177,66 +150,10 @@ if __name__ == '__main__':
     os.remove('sample_test_doc.docx')
     print("\nCleaned up sample_test_doc.docx")
 
-def get_run_details(run) -> dict:
-    """Extracts details from a run."""
-    return {
-        "text": run.text,
-        "font_name": run.font.name,
-        "font_size": run.font.size.pt if run.font.size else None, # Size in points
-        "bold": run.bold,
-        "italic": run.italic,
-        "underline": run.underline,
-    }
+# --- Element Analysis Utilities ---
+# (Duplicated block of get_run_details, get_paragraph_details, get_document_analysis removed from here)
 
-def get_paragraph_details(para, para_index: int) -> dict:
-    """Extracts details from a paragraph, including its runs."""
-    alignment_name = None
-    if para.alignment is not None:
-        # para.alignment should be a member of WD_ALIGN_PARAGRAPH enum
-        # Accessing .name gives the string representation like 'LEFT', 'CENTER'
-        try:
-            alignment_name = para.alignment.name
-        except AttributeError: # Should not happen if para.alignment is a valid enum member
-            alignment_name = str(para.alignment) # Fallback to string of the value
-
-    para_info = {
-        "paragraph_index": para_index,
-        "text": para.text,
-        "style_name": para.style.name if para.style else "Default Paragraph Font",
-        "alignment": alignment_name,
-        "runs": [get_run_details(run) for run in para.runs]
-    }
-    # Heading level detection
-    if para.style and para.style.name.startswith('Heading'):
-        try:
-            level = int(para.style.name.split(' ')[-1])
-            para_info["type"] = "heading"
-            para_info["level"] = level
-        except ValueError:
-            para_info["type"] = "paragraph" # Could be a custom heading style not ending in a number
-            para_info["level"] = 0
-    elif para.style and para.style.name == "Title": # Common style for document title
-        para_info["type"] = "heading"
-        para_info["level"] = 0
-    else:
-        para_info["type"] = "paragraph"
-
-    return para_info
-
-def get_document_analysis(document: Document) -> dict:
-    """
-    Analyzes a Document object and extracts detailed information about its elements.
-    Returns a dictionary with a list of element details.
-    """
-    analysis = {"elements": []}
-    for i, para in enumerate(document.paragraphs):
-        para_details = get_paragraph_details(para, i)
-        analysis["elements"].append(para_details)
-
-    # Future: Add analysis for tables, lists, images, sections, etc.
-    return analysis
-
-# --- Formatting Application Utilities ---
+# --- Low-Level Formatting Utilities ---
 
 def set_paragraph_font_properties(paragraph, font_name: str = None, size_pt: float = None, bold: bool = None, italic: bool = None, underline: bool = None):
     """Applies font properties to all runs in a paragraph."""
@@ -274,14 +191,78 @@ def set_paragraph_alignment_properties(paragraph, alignment: str = None): # alig
         except Exception as e:
             print(f"Warning: Exception setting alignment '{alignment}': {e}")
 
+# --- Helper for Scope Resolution ---
 
-# More specific action handlers to be called by the tool:
+def _get_target_paragraphs(doc: Document, elements_details: list, scope: str) -> list:
+    """
+    Helper function to resolve a scope string to a list of paragraph objects.
+    """
+    target_paras = []
+    if not scope:
+        print("Warning: No scope provided for target paragraph resolution.")
+        return target_paras
+
+    if scope == "all_paragraphs":
+        target_paras = doc.paragraphs
+    elif scope.startswith("headings_level_"):
+        try:
+            level = int(scope.split("_")[-1])
+            for el_detail in elements_details:
+                if el_detail.get("type") == "heading" and el_detail.get("level") == level:
+                    if el_detail["paragraph_index"] < len(doc.paragraphs):
+                        target_paras.append(doc.paragraphs[el_detail["paragraph_index"]])
+        except ValueError:
+            print(f"Warning: Invalid heading level in scope '{scope}'.")
+    elif scope.startswith("paragraph_index_"):
+        try:
+            idx = int(scope.split("_")[-1])
+            if 0 <= idx < len(doc.paragraphs):
+                target_paras.append(doc.paragraphs[idx])
+            else:
+                print(f"Warning: Paragraph index {idx} out of bounds for scope '{scope}'.")
+        except ValueError:
+            print(f"Warning: Invalid paragraph index in scope '{scope}'.")
+    elif scope == "all_body_paragraphs":
+         for el_detail in elements_details:
+            if el_detail.get("type") == "paragraph": # Not a heading
+                if el_detail["paragraph_index"] < len(doc.paragraphs):
+                    target_paras.append(doc.paragraphs[el_detail["paragraph_index"]])
+    else:
+        print(f"Warning: Unknown or unsupported scope '{scope}' for paragraph resolution.")
+
+    return target_paras
+
+# --- Action Handlers (Tool Implementations) ---
+
+def apply_find_and_replace_action(doc: Document, action: dict): # Removed unused elements_details
+    """
+    Finds all occurrences of a word/phrase and replaces it with the given replacement.
+    Action: {"action": "find_and_replace", "find": "text_to_find", "replace_with": "replacement_text"}
+    """
+    print(f"Applying find_and_replace action: {action}")
+    find_text = action.get("find")
+    replace_with = action.get("replace_with")
+
+    if not find_text or replace_with is None: # Check if find_text is empty or replace_with is not provided (None is a valid replacement)
+        print("Warning: 'find' text is empty or 'replace_with' not provided for find_and_replace. Skipping.")
+        return
+
+    replaced_count = 0
+    for para in doc.paragraphs:
+        for run in para.runs:
+            if find_text.lower() in run.text.lower():
+                pattern = re.compile(re.escape(find_text), re.IGNORECASE)
+                new_text, n = pattern.subn(replace_with, run.text)
+                if n > 0:
+                    run.text = new_text
+                    replaced_count += n
+    print(f"Applied find_and_replace to {replaced_count} occurrences of '{find_text}'.")
 
 def apply_set_font_action(doc: Document, elements_details: list, action: dict):
     """
     Applies font settings based on the action dictionary.
     Action: {"action": "set_font", "scope": "all_paragraphs" | "headings_level_X" | "paragraph_index_N",
-             "font_name": "Arial", "size": 12, "bold": false, "italic": false}
+             "font_name": "Arial", "size": 12, "bold": false, "italic": false, "underline": false}
     """
     print(f"Applying font action: {action}")
     scope = action.get("scope")
@@ -291,37 +272,9 @@ def apply_set_font_action(doc: Document, elements_details: list, action: dict):
     italic = action.get("italic")
     underline = action.get("underline")
 
-    target_paras = []
-    if scope == "all_paragraphs":
-        target_paras = doc.paragraphs
-    elif scope and scope.startswith("headings_level_"):
-        try:
-            level = int(scope.split("_")[-1])
-            # Iterate through elements_details to find matching paragraphs in the doc
-            for i, el_detail in enumerate(elements_details):
-                if el_detail.get("type") == "heading" and el_detail.get("level") == level:
-                    # Ensure paragraph index is valid
-                    if el_detail["paragraph_index"] < len(doc.paragraphs):
-                        target_paras.append(doc.paragraphs[el_detail["paragraph_index"]])
-        except ValueError:
-            print(f"Warning: Invalid heading level in scope '{scope}'.")
-    elif scope and scope.startswith("paragraph_index_"):
-        try:
-            idx = int(scope.split("_")[-1])
-            if 0 <= idx < len(doc.paragraphs):
-                target_paras.append(doc.paragraphs[idx])
-            else:
-                print(f"Warning: Paragraph index {idx} out of bounds.")
-        except ValueError:
-            print(f"Warning: Invalid paragraph index in scope '{scope}'.")
-    elif scope == "all_body_paragraphs": # Distinguish from headings
-         for i, el_detail in enumerate(elements_details):
-            if el_detail.get("type") == "paragraph": # Not a heading
-                if el_detail["paragraph_index"] < len(doc.paragraphs):
-                    target_paras.append(doc.paragraphs[el_detail["paragraph_index"]])
-    else:
-        print(f"Warning: Unknown or unsupported scope '{scope}' for set_font.")
-        return
+    target_paras = _get_target_paragraphs(doc, elements_details, scope)
+    if not target_paras:
+        return # Warning already printed by _get_target_paragraphs
 
     for para in target_paras:
         set_paragraph_font_properties(para, font_name, size, bold, italic, underline)
@@ -331,8 +284,8 @@ def apply_set_font_action(doc: Document, elements_details: list, action: dict):
 def apply_set_heading_style_action(doc: Document, elements_details: list, action: dict):
     """
     Applies style (font, size, bold etc.) to headings of a specific level.
-    Action: {"action": "set_heading_style", "level": 1, "font_name": "Calibri Light",
-             "size": 18, "bold": true, "spacing_after": 12}
+    Action: {"action": "set_heading_style", "level": (int), "font_name": "Calibri Light",
+             "size": 18, "bold": true, "spacing_after": 12, "italic": false, "underline": false}
     """
     print(f"Applying heading style action: {action}")
     level = action.get("level")
@@ -342,21 +295,20 @@ def apply_set_heading_style_action(doc: Document, elements_details: list, action
     italic = action.get("italic")
     underline = action.get("underline")
     spacing_after_pt = action.get("spacing_after")
-    # keep_with_next = action.get("keep_with_next") # TODO
+    # keep_with_next = action.get("keep_with_next") # TODO: Implement if needed
 
-    target_paras = []
-    # Iterate through elements_details to find matching paragraphs in the doc
-    for i, el_detail in enumerate(elements_details):
-        if el_detail.get("type") == "heading" and el_detail.get("level") == level:
-            if el_detail["paragraph_index"] < len(doc.paragraphs):
-                target_paras.append(doc.paragraphs[el_detail["paragraph_index"]])
+    # Construct scope string for heading level
+    scope = f"headings_level_{level}"
+    target_paras = _get_target_paragraphs(doc, elements_details, scope)
+    if not target_paras:
+        return
 
     for para in target_paras:
         set_paragraph_font_properties(para, font_name, size, bold, italic, underline)
         if spacing_after_pt is not None:
              set_paragraph_spacing_properties(para, spacing_after_pt=spacing_after_pt)
         # if keep_with_next is not None:
-        #     para.paragraph_format.keep_with_next = keep_with_next
+        #     para.paragraph_format.keep_with_next = keep_with_next # Requires python-docx feature
     print(f"Applied style to {len(target_paras)} Level {level} headings.")
 
 
@@ -364,7 +316,7 @@ def apply_set_paragraph_spacing_action(doc: Document, elements_details: list, ac
     """
     Applies paragraph spacing settings.
     Action: {"action": "set_paragraph_spacing", "scope": "all_paragraphs",
-             "spacing_before": 0, "spacing_after": 6, "line_spacing": 1.15}
+             "spacing_before": 0 (pt), "spacing_after": 6 (pt), "line_spacing": 1.15 (rule)}
     """
     print(f"Applying paragraph spacing action: {action}")
     scope = action.get("scope")
@@ -372,17 +324,8 @@ def apply_set_paragraph_spacing_action(doc: Document, elements_details: list, ac
     spacing_after = action.get("spacing_after")
     line_spacing = action.get("line_spacing")
 
-    target_paras = []
-    if scope == "all_paragraphs":
-        target_paras = doc.paragraphs
-    elif scope == "all_body_paragraphs":
-         for i, el_detail in enumerate(elements_details):
-            if el_detail.get("type") == "paragraph": # Not a heading
-                if el_detail["paragraph_index"] < len(doc.paragraphs):
-                    target_paras.append(doc.paragraphs[el_detail["paragraph_index"]])
-    # Add more scopes if needed (e.g., specific paragraph indices, styles)
-    else:
-        print(f"Warning: Unknown or unsupported scope '{scope}' for set_paragraph_spacing.")
+    target_paras = _get_target_paragraphs(doc, elements_details, scope)
+    if not target_paras:
         return
 
     for para in target_paras:
@@ -393,31 +336,14 @@ def apply_set_paragraph_spacing_action(doc: Document, elements_details: list, ac
 def apply_set_alignment_action(doc: Document, elements_details: list, action: dict):
     """
     Applies text alignment.
-    Action: {"action": "set_alignment", "scope": "headings_level_1", "alignment": "LEFT"}
+    Action: {"action": "set_alignment", "scope": "headings_level_1", "alignment": "LEFT" | "CENTER" | "RIGHT" | "JUSTIFY"}
     """
     print(f"Applying alignment action: {action}")
     scope = action.get("scope")
     alignment = action.get("alignment")
 
-    target_paras = []
-    if scope == "all_paragraphs":
-        target_paras = doc.paragraphs
-    elif scope and scope.startswith("headings_level_"):
-        try:
-            level = int(scope.split("_")[-1])
-            for i, el_detail in enumerate(elements_details):
-                if el_detail.get("type") == "heading" and el_detail.get("level") == level:
-                     if el_detail["paragraph_index"] < len(doc.paragraphs):
-                        target_paras.append(doc.paragraphs[el_detail["paragraph_index"]])
-        except ValueError:
-            print(f"Warning: Invalid heading level in scope '{scope}'.")
-    elif scope == "all_body_paragraphs":
-         for i, el_detail in enumerate(elements_details):
-            if el_detail.get("type") == "paragraph": # Not a heading
-                if el_detail["paragraph_index"] < len(doc.paragraphs):
-                    target_paras.append(doc.paragraphs[el_detail["paragraph_index"]])
-    else:
-        print(f"Warning: Unknown or unsupported scope '{scope}' for set_alignment.")
+    target_paras = _get_target_paragraphs(doc, elements_details, scope)
+    if not target_paras:
         return
 
     for para in target_paras:
@@ -425,10 +351,10 @@ def apply_set_alignment_action(doc: Document, elements_details: list, action: di
     print(f"Applied alignment to {len(target_paras)} paragraphs for scope '{scope}'.")
 
 # TODO: Implement other action handlers like:
-# def apply_ensure_consistent_style_action(doc: Document, action: dict): ...
-# def apply_theme_action(doc: Document, action: dict): ...
+# def apply_ensure_consistent_style_action(doc: Document, elements_details: list, action: dict): ...
+# def apply_theme_action(doc: Document, elements_details: list, action: dict): ...
 
-def apply_fix_font_inconsistencies_action(doc: Document, elements_details: list, action: dict):
+def apply_fix_font_inconsistencies_action(doc: Document, elements_details: list, action: dict): # elements_details might not be needed if we iterate all paras
     """
     Attempts to unify fonts across the document based on a target font and size.
     Action: {"action": "fix_font_inconsistencies", "target_font_name": "Calibri", "target_font_size": 11}
@@ -444,29 +370,29 @@ def apply_fix_font_inconsistencies_action(doc: Document, elements_details: list,
         return
 
     changed_elements_count = 0
-    for para_idx, para_detail in enumerate(elements_details):
-        # We operate on the doc.paragraphs directly using original indices
-        if para_idx >= len(doc.paragraphs):
-            continue
+    # This action, by its nature, typically applies document-wide or to all body text.
+    # Using _get_target_paragraphs can allow for more specific scoping if the LLM/plan provides it.
+    # If no scope is given, or "all_paragraphs", it will iterate through all.
+    scope = action.get("scope", "all_paragraphs") # Default to all_paragraphs if no scope provided
 
-        paragraph = doc.paragraphs[para_idx]
+    target_paras = _get_target_paragraphs(doc, elements_details, scope)
+    if not target_paras: # If scope was invalid or no paras matched
+        if not scope or scope == "all_paragraphs": # If it intended to run on all but list is empty
+             print("Warning: No paragraphs found to apply font inconsistency fix, or document is empty.")
+        return
 
-        # Skip headings if plan also has set_heading_style, to avoid conflicts or apply selectively.
-        # For a generic "fix inconsistencies", we might apply to all, or let LLM be more specific with scope.
-        # Current plan from LLM for "make headings bold" also included this, so it might apply to headings too.
-        # Let's assume for now it applies to all runs in all paragraphs unless scope is narrowed by LLM.
-
+    for paragraph in target_paras:
+        # The original logic iterated elements_details and then used doc.paragraphs[para_idx].
+        # Iterating target_paras (which are actual paragraph objects) is more direct.
         for run in paragraph.runs:
             applied_change_to_run = False
             if target_font_name and run.font.name != target_font_name:
-                # print(f"  Run '{run.text[:20]}' changing font from {run.font.name} to {target_font_name}")
                 run.font.name = target_font_name
                 applied_change_to_run = True
-            if target_font_size_pt and run.font.size != Pt(target_font_size_pt):
-                # print(f"  Run '{run.text[:20]}' changing size from {run.font.size} to {Pt(target_font_size_pt)}")
+            if target_font_size_pt and (not run.font.size or run.font.size.pt != target_font_size_pt): # Check if size exists before comparing
                 run.font.size = Pt(target_font_size_pt)
                 applied_change_to_run = True
             if applied_change_to_run:
-                changed_elements_count +=1 # Count runs changed, not paragraphs
+                changed_elements_count +=1 # Count runs changed
 
-    print(f"Applied font inconsistency fix to {changed_elements_count} runs.")
+    print(f"Applied font inconsistency fix to {changed_elements_count} runs within scope '{scope}'.")
