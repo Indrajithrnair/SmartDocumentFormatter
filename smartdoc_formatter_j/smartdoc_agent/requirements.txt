@@ -1,0 +1,8 @@
+langchain
+langchain-groq
+python-docx
+typer[all]
+python-dotenv
+fastapi
+uvicorn[standard]
+python-multipart

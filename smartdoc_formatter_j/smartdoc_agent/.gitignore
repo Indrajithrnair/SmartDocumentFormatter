@@ -1,0 +1,23 @@
+# Node modules
+node_modules/
+
+# Python virtual environments
+venv/
+.env/
+__pycache__/
+
+# Build artifacts
+*.pyc
+*.pyo
+*.pyd
+*.exe
+*.dll
+*.so
+
+# Logs and environment files
+*.log
+*.env
+
+# OS-specific files
+.DS_Store
+Thumbs.db

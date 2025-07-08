@@ -1,0 +1,17 @@
+# Node.js
+node_modules/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+
+# System
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
