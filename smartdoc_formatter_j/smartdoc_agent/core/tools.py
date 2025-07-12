@@ -206,8 +206,94 @@ from smartdoc_agent.utils.document_utils import (
 )
 # Import the new find_and_replace handler
 from smartdoc_agent.utils.document_utils import apply_find_and_replace_action
+# Import the new add_table utility
+from smartdoc_agent.utils.document_utils import add_table
 
-# ... (other tools like analyze_document_structure, create_formatting_plan remain unchanged from previous step)
+
+@tool
+def create_table(tool_input: str | dict) -> str:
+    """
+    Adds a new table to a .docx document and saves the document.
+    Input must be a dictionary (or a JSON string representing a dictionary) with the following keys:
+    - 'doc_path': str, path to the input .docx document.
+    - 'rows': int, number of rows for the new table (must be positive).
+    - 'cols': int, number of columns for the new table (must be positive).
+    - 'output_doc_path': str, path where the modified document with the new table will be saved.
+    - 'data': list[list[str]] (optional), a list of lists representing cell data.
+              Example: [["Header1", "Header2"], ["Cell1_1", "Cell1_2"]]
+    - 'style': str (optional), the name of the table style to apply (e.g., 'Table Grid', 'Light Shading Accent 1').
+
+    Returns a JSON string with:
+    - 'status': 'success' or 'error'.
+    - 'message': str, a descriptive message.
+    - 'output_doc_path': str, path to the saved document if successful.
+    - 'table_details': dict (optional), containing 'rows', 'cols', 'style_applied' if successful.
+    """
+    tool_name = "create_table"
+    print(f"Tool: {tool_name} called with input: {str(tool_input)[:200]}...")
+
+    if isinstance(tool_input, str):
+        try:
+            args = json.loads(tool_input)
+        except json.JSONDecodeError:
+            return json.dumps({"status": "error", "message": f"Invalid JSON string input for {tool_name}."})
+    elif isinstance(tool_input, dict):
+        args = tool_input
+    else:
+        return json.dumps({"status": "error", "message": f"{tool_name} expects a dictionary or JSON string, got {type(tool_input)}."})
+
+    doc_path = args.get("doc_path")
+    rows = args.get("rows")
+    cols = args.get("cols")
+    output_doc_path = args.get("output_doc_path")
+    data = args.get("data")  # Optional
+    style = args.get("style")  # Optional
+
+    # Validate required arguments
+    if not all([doc_path, isinstance(rows, int), isinstance(cols, int), output_doc_path]):
+        return json.dumps({
+            "status": "error",
+            "message": f"Missing or invalid required arguments for {tool_name}. Need 'doc_path' (str), 'rows' (int), 'cols' (int), 'output_doc_path' (str)."
+        })
+
+    if not (rows > 0 and cols > 0):
+        return json.dumps({
+            "status": "error",
+            "message": f"'rows' ({rows}) and 'cols' ({cols}) must be positive integers for {tool_name}."
+        })
+
+    try:
+        doc = load_document(doc_path)
+        if not doc: # load_document might raise, or return None if handled differently (though current impl raises)
+            return json.dumps({"status": "error", "message": f"Failed to load document from {doc_path}."})
+
+        created_table = add_table(doc, rows, cols, data=data, style=style)
+
+        if created_table is None:
+            return json.dumps({"status": "error", "message": "Failed to create table using document_utils.add_table."})
+
+        save_document(doc, output_doc_path)
+
+        table_details_report = {
+            "rows": created_table.rows if hasattr(created_table, 'rows') else rows, # Best effort if table object is proxy
+            "cols": created_table.columns if hasattr(created_table, 'columns') else cols,
+            "style_applied": style if style else "Default"
+            # In future, could add table_id from a registry here
+        }
+
+        return json.dumps({
+            "status": "success",
+            "message": f"Table with {rows}x{cols} created and document saved to {output_doc_path}.",
+            "output_doc_path": output_doc_path,
+            "table_details": table_details_report
+        })
+
+    except FileNotFoundError:
+        return json.dumps({"status": "error", "message": f"Input document not found at {doc_path}."})
+    except Exception as e:
+        error_message = f"Error in {tool_name}: {str(e)}"
+        print(f"Tool Error: {error_message}") # Log full error server-side
+        return json.dumps({"status": "error", "message": error_message})
 
 
 @tool

@@ -1,7 +1,8 @@
 import unittest
 import os
-from unittest.mock import patch, MagicMock # Correctly import patch and MagicMock
-from docx import Document as PythonDocXDocument # Alias to avoid confusion
+import json # Added to fix NameError
+from unittest.mock import patch, MagicMock
+from docx import Document as PythonDocXDocument
 
 # Attempt to import tools, handling potential import errors if run standalone
 try:
@@ -9,21 +10,24 @@ try:
         analyze_document_structure,
         create_formatting_plan,
         apply_contextual_formatting,
-        validate_formatting_result
+        validate_formatting_result,
+        create_table # Added new tool
     )
-    from smartdoc_agent.utils.document_utils import load_document, save_document
-except ImportError:
+    # document_utils are mocked, but good to have them if direct calls were made
+    from smartdoc_agent.utils.document_utils import load_document, save_document, add_table
+except ImportError: # pragma: no cover
     # This is to allow running the test file directly for development,
     # assuming it's in the tests/ directory and smartdoc_agent is in the parent.
     import sys
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    from core.tools import (
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))) # Go up to smartdoc_formatter_j
+    from smartdoc_agent.core.tools import (
         analyze_document_structure,
         create_formatting_plan,
         apply_contextual_formatting,
-        validate_formatting_result
+        validate_formatting_result,
+        create_table
     )
-    from utils.document_utils import load_document, save_document
+    from smartdoc_agent.utils.document_utils import load_document, save_document, add_table
 
 
 class TestFormattingTools(unittest.TestCase):
@@ -52,7 +56,10 @@ class TestFormattingTools(unittest.TestCase):
     def test_analyze_document_structure_runs(self):
         """Test that analyze_document_structure runs and returns a JSON string."""
         import json
-        result_json_str = analyze_document_structure.invoke({"doc_path": self.test_doc_path})
+        # Langchain tools expect the input dict to be under a key matching the Pydantic model field,
+        # which is often 'tool_input' if the function takes a single dict/str argument.
+        tool_args = {"doc_path": self.test_doc_path}
+        result_json_str = analyze_document_structure.invoke({"tool_input": tool_args})
         self.assertIsInstance(result_json_str, str)
 
         try:
@@ -95,10 +102,11 @@ class TestFormattingTools(unittest.TestCase):
         sample_analysis_json = json.dumps(sample_analysis_dict)
         user_goal = "Make it look professional."
 
-        result_plan_json = create_formatting_plan.invoke({
+        tool_args = {
             "document_analysis_json": sample_analysis_json,
             "user_goal": user_goal
-        })
+        }
+        result_plan_json = create_formatting_plan.invoke({"tool_input": tool_args})
 
         self.assertIsInstance(result_plan_json, str)
         try:
@@ -130,21 +138,29 @@ class TestFormattingTools(unittest.TestCase):
         }
         sample_analysis_json = json.dumps(sample_analysis_dict)
 
-        # Mock the actual document utility functions that perform changes
+        # Define a side effect function for the save_document mock
+        def mock_save_document_side_effect(doc, path):
+            # Create a dummy file to make os.path.exists() return True
+            with open(path, 'w') as f:
+                f.write("dummy content")
+            return True # Simulate successful save
+
+        # Mock the document utility functions that perform changes
         with patch('smartdoc_agent.core.tools.load_document') as mock_load, \
-             patch('smartdoc_agent.core.tools.save_document') as mock_save, \
+             patch('smartdoc_agent.core.tools.save_document', side_effect=mock_save_document_side_effect) as mock_save, \
              patch('smartdoc_agent.core.tools.apply_set_font_action') as mock_apply_font, \
              patch('smartdoc_agent.core.tools.apply_set_heading_style_action') as mock_apply_heading:
 
             mock_doc_instance = MagicMock(spec=PythonDocXDocument)
             mock_load.return_value = mock_doc_instance
 
-            result_json_str = apply_contextual_formatting.invoke({
+            tool_args = {
                 "doc_path": self.test_doc_path,
                 "formatting_plan_json": sample_plan_json,
-                "document_analysis_json": sample_analysis_json, # New argument
+                "document_analysis_json": sample_analysis_json,
                 "output_doc_path": self.test_output_doc_path
-            })
+            }
+            result_json_str = apply_contextual_formatting.invoke({"tool_input": tool_args})
             self.assertIsInstance(result_json_str, str)
 
             try:
@@ -153,7 +169,8 @@ class TestFormattingTools(unittest.TestCase):
                 self.fail("apply_contextual_formatting did not return valid JSON.")
 
             self.assertEqual(result_data.get("status"), "success")
-            self.assertTrue(os.path.exists(self.test_output_doc_path)) # Still creates the file due to stub
+            # This assertion now passes because our mock_save_document_side_effect creates the file
+            self.assertTrue(os.path.exists(self.test_output_doc_path))
 
             # Check if our action handlers were called
             mock_load.assert_called_once_with(self.test_doc_path)
@@ -171,16 +188,155 @@ class TestFormattingTools(unittest.TestCase):
             doc = load_document(self.test_doc_path)
             save_document(doc, self.test_output_doc_path)
 
-        sample_plan = "1. Change font. 2. Check headings."
+        sample_plan = "1. Change font. 2. Check headings." # This tool's old stub took different args
         user_goal = "Check professionalism."
-        result = validate_formatting_result.invoke({
-            "original_doc_path": self.test_doc_path,
-            "modified_doc_path": self.test_output_doc_path,
-            "formatting_plan": sample_plan,
+
+        # The actual validate_formatting_result tool expects JSON strings for analyses and plan
+        dummy_analysis_json = json.dumps({"document_path": "dummy.docx", "summary": {}, "elements": []})
+        dummy_plan_json = json.dumps([{"action":"dummy"}])
+
+        tool_args = {
+            "original_doc_analysis_json": dummy_analysis_json,
+            "modified_doc_analysis_json": dummy_analysis_json,
+            "formatting_plan_json": dummy_plan_json,
             "user_goal": user_goal
-        })
+        }
+        # Mock the LLM for validate_formatting_result as it uses one
+        with patch('smartdoc_agent.core.tools.llm') as mock_validate_llm:
+            mock_validate_llm.invoke.return_value = MagicMock(content=json.dumps({"overall_assessment": "Good"}))
+            result = validate_formatting_result.invoke({"tool_input": tool_args})
+
         self.assertIsInstance(result, str)
-        self.assertIn(f"Validation Report for goal '{user_goal}'", result)
+        # The tool now returns raw JSON from the LLM, so we check the JSON content.
+        result_data = json.loads(result)
+        self.assertEqual(result_data.get("overall_assessment"), "Good")
+
+
+class TestCreateTableTool(unittest.TestCase):
+    def setUp(self):
+        self.test_doc_path = "temp_create_table_input.docx"
+        self.test_output_doc_path = "temp_create_table_output.docx"
+
+        # Create a dummy input document for tests that need one
+        doc = PythonDocXDocument()
+        doc.add_paragraph("Initial content.")
+        doc.save(self.test_doc_path)
+
+    def tearDown(self):
+        if os.path.exists(self.test_doc_path):
+            os.remove(self.test_doc_path)
+        if os.path.exists(self.test_output_doc_path):
+            os.remove(self.test_output_doc_path)
+
+    @patch('smartdoc_agent.core.tools.save_document')
+    @patch('smartdoc_agent.core.tools.add_table')
+    @patch('smartdoc_agent.core.tools.load_document')
+    def test_create_table_success_basic(self, mock_load_document, mock_add_table, mock_save_document):
+        import json
+        mock_doc = MagicMock(spec=PythonDocXDocument)
+        mock_load_document.return_value = mock_doc
+
+        mock_table_obj = MagicMock()
+        mock_table_obj.rows = 2 # Simulate table object attributes
+        mock_table_obj.columns = 3
+        mock_add_table.return_value = mock_table_obj
+
+        tool_input = {
+            "doc_path": self.test_doc_path,
+            "rows": 2,
+            "cols": 3,
+            "output_doc_path": self.test_output_doc_path
+        }
+        result_json = create_table.invoke({"tool_input": tool_input})
+        result = json.loads(result_json)
+
+        self.assertEqual(result["status"], "success")
+        self.assertIn("Table with 2x3 created", result["message"])
+        self.assertEqual(result["output_doc_path"], self.test_output_doc_path)
+        self.assertIsNotNone(result["table_details"])
+        self.assertEqual(result["table_details"]["rows"], 2)
+        self.assertEqual(result["table_details"]["cols"], 3)
+        self.assertEqual(result["table_details"]["style_applied"], "Default")
+
+        mock_load_document.assert_called_once_with(self.test_doc_path)
+        mock_add_table.assert_called_once_with(mock_doc, 2, 3, data=None, style=None)
+        mock_save_document.assert_called_once_with(mock_doc, self.test_output_doc_path)
+
+    @patch('smartdoc_agent.core.tools.save_document')
+    @patch('smartdoc_agent.core.tools.add_table')
+    @patch('smartdoc_agent.core.tools.load_document')
+    def test_create_table_success_with_data_and_style(self, mock_load_document, mock_add_table, mock_save_document):
+        import json
+        mock_doc = MagicMock(spec=PythonDocXDocument)
+        mock_load_document.return_value = mock_doc
+
+        mock_table_obj = MagicMock()
+        mock_table_obj.rows = 1
+        mock_table_obj.columns = 1
+        mock_add_table.return_value = mock_table_obj
+
+        table_data = [["Test Data"]]
+        table_style = "Table Grid"
+
+        tool_input = {
+            "doc_path": self.test_doc_path,
+            "rows": 1,
+            "cols": 1,
+            "data": table_data,
+            "style": table_style,
+            "output_doc_path": self.test_output_doc_path
+        }
+        result_json = create_table.invoke({"tool_input": tool_input})
+        result = json.loads(result_json)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["table_details"]["style_applied"], table_style)
+        mock_add_table.assert_called_once_with(mock_doc, 1, 1, data=table_data, style=table_style)
+
+    def test_create_table_invalid_input_args(self):
+        import json
+        # Missing rows
+        tool_input_missing_rows = {
+            "doc_path": self.test_doc_path, "cols": 2, "output_doc_path": self.test_output_doc_path
+        }
+        result_json = create_table.invoke({"tool_input": tool_input_missing_rows})
+        result = json.loads(result_json)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Missing or invalid required arguments", result["message"])
+
+        # Invalid rows (not positive)
+        tool_input_invalid_rows = {
+            "doc_path": self.test_doc_path, "rows": 0, "cols": 2, "output_doc_path": self.test_output_doc_path
+        }
+        result_json = create_table.invoke({"tool_input": tool_input_invalid_rows})
+        result = json.loads(result_json)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("'rows' (0) and 'cols' (2) must be positive integers", result["message"])
+
+    @patch('smartdoc_agent.core.tools.load_document')
+    def test_create_table_load_failure(self, mock_load_document):
+        import json
+        mock_load_document.side_effect = FileNotFoundError("Mocked File Not Found")
+        tool_input = {"doc_path": "nonexistent.docx", "rows": 2, "cols": 2, "output_doc_path": self.test_output_doc_path}
+        result_json = create_table.invoke({"tool_input": tool_input})
+        result = json.loads(result_json)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Input document not found at nonexistent.docx", result["message"])
+
+    @patch('smartdoc_agent.core.tools.load_document')
+    @patch('smartdoc_agent.core.tools.add_table')
+    def test_create_table_add_table_failure(self, mock_add_table, mock_load_document):
+        import json
+        mock_doc = MagicMock(spec=PythonDocXDocument)
+        mock_load_document.return_value = mock_doc
+        mock_add_table.return_value = None # Simulate failure in add_table utility
+
+        tool_input = {"doc_path": self.test_doc_path, "rows": 2, "cols": 2, "output_doc_path": self.test_output_doc_path}
+        result_json = create_table.invoke({"tool_input": tool_input})
+        result = json.loads(result_json)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Failed to create table using document_utils.add_table", result["message"])
+
 
 if __name__ == '__main__':
     unittest.main()

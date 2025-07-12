@@ -2,6 +2,7 @@ import unittest
 import os
 from docx import Document as PythonDocXDocument # Explicit alias
 from docx.shared import Pt
+# from docx.enum.text import WD_ALIGN_PARAGRAPH # Will be imported below after sys.path manipulation
 
 # Attempt to import utils, handling potential import errors if run standalone
 try:
@@ -9,20 +10,35 @@ try:
         load_document,
         save_document,
         extract_text_from_paragraphs,
-        extract_headings
-        # Add new functions here as they are created, e.g.:
-        # change_paragraph_font,
-        # get_paragraph_font_info
+        extract_headings,
+        get_document_analysis,
+        set_paragraph_font_properties,
+        set_paragraph_spacing_properties,
+        set_paragraph_alignment_properties,
+        apply_set_font_action,
+        apply_set_heading_style_action,
+        add_table
     )
-except ImportError:
+    from docx.enum.text import WD_ALIGN_PARAGRAPH # Import here if main path works
+except ImportError: # pragma: no cover
+    # This block allows running tests directly if the package structure isn't fully recognized
     import sys
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    from utils.document_utils import (
+    import os # Ensure os is imported here if not globally
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))) # Go up to smartdoc_formatter_j
+    from smartdoc_agent.utils.document_utils import (
         load_document,
         save_document,
         extract_text_from_paragraphs,
-        extract_headings
+        extract_headings,
+        get_document_analysis,
+        set_paragraph_font_properties,
+        set_paragraph_spacing_properties,
+        set_paragraph_alignment_properties,
+        apply_set_font_action,
+        apply_set_heading_style_action,
+        add_table
     )
+    from docx.enum.text import WD_ALIGN_PARAGRAPH # Also import here for the fallback path
 
 class TestDocumentUtils(unittest.TestCase):
 
@@ -64,7 +80,9 @@ class TestDocumentUtils(unittest.TestCase):
         """Test loading and saving a document."""
         loaded_doc = load_document(self.doc_path)
         self.assertIsNotNone(loaded_doc)
-        self.assertIsInstance(loaded_doc, PythonDocXDocument)
+        # self.assertIsInstance(loaded_doc, PythonDocXDocument) # Original line causing error
+        self.assertEqual(type(loaded_doc).__name__, 'Document', "loaded_doc should be a Document type")
+        self.assertTrue(type(loaded_doc).__module__.startswith('docx.document'), "loaded_doc module should be from docx.document")
 
         save_path = os.path.join(self.test_dir, "saved_test_doc.docx")
         save_document(loaded_doc, save_path)
@@ -73,6 +91,8 @@ class TestDocumentUtils(unittest.TestCase):
         # Try loading the saved document to ensure it's valid
         reloaded_doc = load_document(save_path)
         self.assertIsNotNone(reloaded_doc)
+        self.assertEqual(type(reloaded_doc).__name__, 'Document', "reloaded_doc should be a Document type")
+        self.assertTrue(type(reloaded_doc).__module__.startswith('docx.document'), "reloaded_doc module should be from docx.document")
 
     def test_extract_text_from_paragraphs(self):
         """Test extracting text from paragraphs."""
@@ -165,29 +185,12 @@ class TestDocumentUtils(unittest.TestCase):
         self.assertEqual(h1_element["type"], "heading")
         self.assertEqual(h1_element["level"], 1)
         self.assertEqual(h1_element["text"], "Heading Level 1")
-        # self.assertTrue(h1_element["runs"][0]["bold"]) # This was manually set in setUpClass
+        # self.assertTrue(h1_element["runs"][0]["bold"]) # This was manually set in setUpClass, useful for detailed run checks
 
     def test_load_document_file_not_found(self):
         """Test loading a non-existent document."""
-        with self.assertRaises(Exception): # python-docx raises various errors, Exception is broad
-            load_document("non_existent_document.docx")
-
-    # Placeholder for future tests for more advanced utilities
-    # def test_change_paragraph_font(self):
-    #     doc = load_document(self.doc_path)
-    #     # Find a specific paragraph to change
-    #     # For simplicity, let's target the first actual paragraph of content
-    #     # This depends on the structure created in setUpClass
-    #     target_paragraph = doc.paragraphs[1] # "This is the first paragraph."
-
-    #     change_paragraph_font(target_paragraph, "Courier New", 10)
-
-    #     # Verify the change
-    #     # This requires a way to get font info, e.g., get_paragraph_font_info
-    #     # font_info = get_paragraph_font_info(target_paragraph)
-    #     # self.assertEqual(font_info['name'], 'Courier New')
-    #     # self.assertEqual(font_info['size'], Pt(10))
-    #     pass # Implement when change_paragraph_font and getter are ready
+        with self.assertRaises(Exception): # python-docx raises PackageNotFoundError or similar, Exception is broad
+            load_document("non_existent_document_for_sure.docx")
 
     def test_set_paragraph_font_properties(self):
         doc = PythonDocXDocument()
@@ -261,8 +264,69 @@ class TestDocumentUtils(unittest.TestCase):
         self.assertFalse(h1_para.runs[0].bold) # Assuming it might have been bold before
         self.assertEqual(h1_para.paragraph_format.space_after, Pt(18))
 
+    def test_add_table_utility(self):
+        """Test the add_table utility function."""
+        doc = PythonDocXDocument()
+
+        # Test basic table creation
+        table1 = add_table(doc, rows=2, cols=3)
+        self.assertIsNotNone(table1)
+        self.assertEqual(len(table1.rows), 2)
+        self.assertEqual(len(table1.columns), 3)
+        self.assertEqual(len(doc.tables), 1)
+
+        # Test table creation with data
+        data = [["Name", "Age"], ["Alice", "30"], ["Bob", "24"]]
+        table2 = add_table(doc, rows=3, cols=2, data=data)
+        self.assertIsNotNone(table2)
+        self.assertEqual(len(table2.rows), 3)
+        self.assertEqual(len(table2.columns), 2)
+        self.assertEqual(table2.cell(0, 0).text, "Name")
+        self.assertEqual(table2.cell(1, 1).text, "30")
+        self.assertEqual(table2.cell(2, 0).text, "Bob")
+        self.assertEqual(len(doc.tables), 2)
+
+        # Test data dimensions mismatch (more rows in data than table rows)
+        data_more_rows = [["R1C1"], ["R2C1"], ["R3C1"]]
+        table_data_mr = add_table(doc, rows=2, cols=1, data=data_more_rows)
+        self.assertEqual(table_data_mr.cell(0,0).text, "R1C1")
+        self.assertEqual(table_data_mr.cell(1,0).text, "R2C1")
+        # R3C1 should be ignored
+
+        # Test data dimensions mismatch (more cols in data than table cols)
+        data_more_cols = [["R1C1", "R1C2", "R1C3"]]
+        table_data_mc = add_table(doc, rows=1, cols=2, data=data_more_cols)
+        self.assertEqual(table_data_mc.cell(0,0).text, "R1C1")
+        self.assertEqual(table_data_mc.cell(0,1).text, "R1C2")
+        # R1C3 should be ignored
+
+        # Test table creation with a valid style
+        # Note: For this to pass robustly, the style name must be valid in typical Word installations.
+        # 'Table Grid' is a very common and safe one.
+        table3 = add_table(doc, rows=2, cols=2, style='Table Grid')
+        self.assertIsNotNone(table3)
+        self.assertEqual(table3.style.name, 'Table Grid') # python-docx might store it as 'TableGrid' or similar
+
+        # Test with an invalid style (python-docx usually defaults or ignores, doesn't hard error)
+        # The `add_table` utility function prints a warning.
+        table4 = add_table(doc, rows=1, cols=1, style='NonExistentStyle123')
+        self.assertIsNotNone(table4) # Table should still be created
+        # Default style might be applied, or style might be None or have a default name
+        # Exact assertion depends on python-docx behavior for truly invalid styles.
+        # For now, ensuring it doesn't crash and returns a table is sufficient.
+        # The utility function itself prints a warning which is good.
+
+        # Test invalid rows/cols
+        invalid_table_rows = add_table(doc, rows=0, cols=2)
+        self.assertIsNone(invalid_table_rows)
+        invalid_table_cols = add_table(doc, rows=2, cols=-1)
+        self.assertIsNone(invalid_table_cols)
+
+        # Test invalid document object
+        not_a_doc = "I am not a document"
+        invalid_doc_call = add_table(not_a_doc, rows=2, cols=2)
+        self.assertIsNone(invalid_doc_call)
+
+
 if __name__ == '__main__':
     unittest.main()
-
-# Need to import WD_ALIGN_PARAGRAPH from docx.enum.text for test_set_paragraph_alignment_properties
-from docx.enum.text import WD_ALIGN_PARAGRAPH
