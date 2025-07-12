@@ -11,10 +11,18 @@ try:
         create_formatting_plan,
         apply_contextual_formatting,
         validate_formatting_result,
-        create_table # Added new tool
+        create_table,
+        format_table_cell_tool,
+        merge_table_cells_tool
     )
     # document_utils are mocked, but good to have them if direct calls were made
-    from smartdoc_agent.utils.document_utils import load_document, save_document, add_table
+    from smartdoc_agent.utils.document_utils import (
+        load_document,
+        save_document,
+        add_table,
+        format_table_cell,
+        merge_table_cells
+    )
 except ImportError: # pragma: no cover
     # This is to allow running the test file directly for development,
     # assuming it's in the tests/ directory and smartdoc_agent is in the parent.
@@ -25,9 +33,17 @@ except ImportError: # pragma: no cover
         create_formatting_plan,
         apply_contextual_formatting,
         validate_formatting_result,
-        create_table
+        create_table,
+        format_table_cell_tool,
+        merge_table_cells_tool
     )
-    from smartdoc_agent.utils.document_utils import load_document, save_document, add_table
+    from smartdoc_agent.utils.document_utils import (
+        load_document,
+        save_document,
+        add_table,
+        format_table_cell,
+        merge_table_cells
+    )
 
 
 class TestFormattingTools(unittest.TestCase):
@@ -336,6 +352,67 @@ class TestCreateTableTool(unittest.TestCase):
         result = json.loads(result_json)
         self.assertEqual(result["status"], "error")
         self.assertIn("Failed to create table using document_utils.add_table", result["message"])
+
+class TestTableManipulationTools(unittest.TestCase):
+    def setUp(self):
+        self.doc_path = "temp_table_tools_doc.docx"
+        self.output_path = "temp_table_tools_doc_modified.docx"
+        doc = PythonDocXDocument()
+        doc.add_table(rows=2, cols=2) # Add a table for the tools to find
+        doc.save(self.doc_path)
+
+    def tearDown(self):
+        if os.path.exists(self.doc_path):
+            os.remove(self.doc_path)
+        if os.path.exists(self.output_path):
+            os.remove(self.output_path)
+
+    @patch('smartdoc_agent.core.tools.save_document')
+    @patch('smartdoc_agent.core.tools.format_table_cell')
+    @patch('smartdoc_agent.core.tools.load_document')
+    def test_format_table_cell_tool_success(self, mock_load, mock_format, mock_save):
+        mock_doc = MagicMock()
+        mock_table = MagicMock()
+        mock_doc.tables = [mock_table]
+        mock_load.return_value = mock_doc
+        mock_format.return_value = True
+
+        tool_args = {
+            "doc_path": self.doc_path, "output_doc_path": self.output_path,
+            "table_index": 0, "row": 0, "col": 0, "text": "Hello"
+        }
+        result = json.loads(format_table_cell_tool.invoke({"tool_input": tool_args}))
+        self.assertEqual(result["status"], "success")
+        mock_format.assert_called_once_with(table=mock_table, row=0, col=0, text="Hello", font_name=None, font_size=None, bold=None, italic=None, underline=None, alignment=None, shading=None)
+        mock_save.assert_called_once()
+
+    def test_format_table_cell_tool_invalid_index(self):
+        tool_args = {
+            "doc_path": self.doc_path, "output_doc_path": self.output_path,
+            "table_index": 99, "row": 0, "col": 0, "text": "Hello"
+        }
+        result = json.loads(format_table_cell_tool.invoke({"tool_input": tool_args}))
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Table index 99 is out of bounds", result["message"])
+
+    @patch('smartdoc_agent.core.tools.save_document')
+    @patch('smartdoc_agent.core.tools.merge_table_cells')
+    @patch('smartdoc_agent.core.tools.load_document')
+    def test_merge_table_cells_tool_success(self, mock_load, mock_merge, mock_save):
+        mock_doc = MagicMock()
+        mock_table = MagicMock()
+        mock_doc.tables = [mock_table]
+        mock_load.return_value = mock_doc
+        mock_merge.return_value = True
+
+        tool_args = {
+            "doc_path": self.doc_path, "output_doc_path": self.output_path,
+            "table_index": 0, "start_row": 0, "start_col": 0, "end_row": 0, "end_col": 1
+        }
+        result = json.loads(merge_table_cells_tool.invoke({"tool_input": tool_args}))
+        self.assertEqual(result["status"], "success")
+        mock_merge.assert_called_once_with(mock_table, 0, 0, 0, 1)
+        mock_save.assert_called_once()
 
 
 if __name__ == '__main__':

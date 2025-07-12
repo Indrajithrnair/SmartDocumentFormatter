@@ -17,9 +17,11 @@ try:
         set_paragraph_alignment_properties,
         apply_set_font_action,
         apply_set_heading_style_action,
-        add_table
+        add_table,
+        format_table_cell,
+        merge_table_cells
     )
-    from docx.enum.text import WD_ALIGN_PARAGRAPH # Import here if main path works
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
 except ImportError: # pragma: no cover
     # This block allows running tests directly if the package structure isn't fully recognized
     import sys
@@ -36,9 +38,11 @@ except ImportError: # pragma: no cover
         set_paragraph_alignment_properties,
         apply_set_font_action,
         apply_set_heading_style_action,
-        add_table
+        add_table,
+        format_table_cell,
+        merge_table_cells
     )
-    from docx.enum.text import WD_ALIGN_PARAGRAPH # Also import here for the fallback path
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 class TestDocumentUtils(unittest.TestCase):
 
@@ -327,6 +331,69 @@ class TestDocumentUtils(unittest.TestCase):
         invalid_doc_call = add_table(not_a_doc, rows=2, cols=2)
         self.assertIsNone(invalid_doc_call)
 
+class TestTableFormatUtils(unittest.TestCase):
+    def setUp(self):
+        self.doc = PythonDocXDocument()
+        self.table = self.doc.add_table(rows=3, cols=3)
+        for i in range(3):
+            for j in range(3):
+                self.table.cell(i,j).text = f"Cell {i},{j}"
+
+    def test_format_table_cell_success(self):
+        # Test text update
+        result = format_table_cell(self.table, 0, 0, text="New Text")
+        self.assertTrue(result)
+        self.assertEqual(self.table.cell(0, 0).text, "New Text")
+
+        # Test font formatting
+        result = format_table_cell(self.table, 0, 1, font_name="Arial", font_size=14, bold=True)
+        self.assertTrue(result)
+        run = self.table.cell(0, 1).paragraphs[0].runs[0]
+        self.assertEqual(run.font.name, "Arial")
+        self.assertEqual(run.font.size, Pt(14))
+        self.assertTrue(run.bold)
+
+        # Test alignment
+        result = format_table_cell(self.table, 1, 0, alignment="CENTER")
+        self.assertTrue(result)
+        self.assertEqual(self.table.cell(1, 0).paragraphs[0].alignment, WD_ALIGN_PARAGRAPH.CENTER)
+
+        # Test shading (basic check, as verification requires XML inspection)
+        # This test mainly ensures the function doesn't crash.
+        result = format_table_cell(self.table, 1, 1, shading="C0C0C0")
+        self.assertTrue(result)
+        # A deeper test would involve mocking OxmlElement or checking cell._tc.xml
+
+    def test_format_table_cell_out_of_bounds(self):
+        result = format_table_cell(self.table, 99, 0) # Invalid row
+        self.assertFalse(result)
+        result = format_table_cell(self.table, 0, 99) # Invalid col
+        self.assertFalse(result)
+
+    def test_merge_table_cells_success(self):
+        # Set initial text
+        self.table.cell(0,0).text = "Top-Left"
+        self.table.cell(0,1).text = "Top-Right"
+
+        # Merge (0,0) and (0,1)
+        result = merge_table_cells(self.table, 0, 0, 0, 1)
+        self.assertTrue(result)
+
+        # After merging, accessing cell (0,1) should functionally represent the same merged cell.
+        # The text of the merged cell becomes the concatenated text of the original cells.
+        self.assertEqual(self.table.cell(0,0).text, "Top-Left\nTop-Right")
+        self.assertEqual(self.table.cell(0,1).text, "Top-Left\nTop-Right")
+        # The objects themselves may not be identical, so self.assertIs is too strict.
+        # The important part is that they now both point to the same content.
+
+    def test_merge_table_cells_invalid_region(self):
+        # Test out of bounds
+        result = merge_table_cells(self.table, 0, 0, 99, 1)
+        self.assertFalse(result)
+
+        # Test inverted region
+        result = merge_table_cells(self.table, 1, 1, 0, 0)
+        self.assertFalse(result)
 
 if __name__ == '__main__':
     unittest.main()

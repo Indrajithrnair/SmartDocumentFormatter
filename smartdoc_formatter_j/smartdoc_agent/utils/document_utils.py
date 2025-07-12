@@ -2,7 +2,9 @@ import re
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.table import Table # Added for type hinting Table object
+from docx.table import Table, _Cell
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 # --- Document Load/Save Utilities ---
 
@@ -309,6 +311,129 @@ def add_table(doc: Document, rows: int, cols: int, data: list[list[str]] = None,
     except Exception as e:
         print(f"Error creating table in add_table: {e}")
         return None
+
+def _set_cell_shading(cell: _Cell, hex_color: str):
+    """
+    Applies background shading to a table cell.
+    Requires direct XML manipulation as python-docx does not have a direct API for this.
+    """
+    if not isinstance(cell, _Cell):
+        print("Warning: Invalid cell object provided to _set_cell_shading.")
+        return
+
+    # Get the table cell properties element (tcPr)
+    tcPr = cell._tc.get_or_add_tcPr()
+
+    # Create a new w:shd element
+    shd = OxmlElement('w:shd')
+
+    # Set attributes for the shading
+    shd.set(qn('w:fill'), hex_color)
+    shd.set(qn('w:val'), 'clear') # 'clear' is a common value for solid fills
+
+    # Append the shading element to the cell properties
+    tcPr.append(shd)
+
+def format_table_cell(
+    table: Table,
+    row: int,
+    col: int,
+    text: str = None,
+    font_name: str = None,
+    font_size: float = None,
+    bold: bool = None,
+    italic: bool = None,
+    underline: bool = None,
+    alignment: str = None,
+    shading: str = None
+) -> bool:
+    """
+    Formats a specific cell in a table.
+
+    Args:
+        table: The python-docx Table object.
+        row: The row index of the cell.
+        col: The column index of the cell.
+        text: Optional new text for the cell.
+        font_name: Optional font name for the cell text.
+        font_size: Optional font size (in points) for the cell text.
+        bold: Optional bold setting for the cell text.
+        italic: Optional italic setting for the cell text.
+        underline: Optional underline setting for the cell text.
+        alignment: Optional alignment for the cell content ('LEFT', 'CENTER', 'RIGHT', 'JUSTIFY').
+        shading: Optional hex color string for the cell's background shading (e.g., 'C0C0C0').
+
+    Returns:
+        True if formatting was successful, False otherwise.
+    """
+    try:
+        if row >= len(table.rows) or col >= len(table.columns) or row < 0 or col < 0:
+            print(f"Error: Cell ({row}, {col}) is out of bounds for the table.")
+            return False
+
+        cell = table.cell(row, col)
+
+        # A cell must have at least one paragraph.
+        # We will operate on the first paragraph for text, font, and alignment settings.
+        paragraph = cell.paragraphs[0]
+
+        if text is not None:
+            # When setting text, clear existing content in the paragraph first.
+            # A simple way is to clear runs and add a new one.
+            paragraph.text = text
+            # After setting the text, we need to re-fetch the paragraph to apply font settings to the new run(s).
+            # This is a nuance of python-docx: setting paragraph.text replaces the runs.
+            paragraph = cell.paragraphs[0]
+
+        # Apply font properties if any are provided
+        if any([font_name, font_size, bold, italic, underline]):
+            set_paragraph_font_properties(paragraph, font_name, font_size, bold, italic, underline)
+
+        # Apply alignment if provided
+        if alignment:
+            set_paragraph_alignment_properties(paragraph, alignment)
+
+        # Apply shading if provided
+        if shading:
+            _set_cell_shading(cell, shading)
+
+        return True
+
+    except Exception as e:
+        print(f"Error formatting cell ({row}, {col}): {e}")
+        return False
+
+def merge_table_cells(table: Table, start_row: int, start_col: int, end_row: int, end_col: int) -> bool:
+    """
+    Merges a rectangular region of cells in a table.
+
+    Args:
+        table: The python-docx Table object.
+        start_row: The starting row index of the merge region.
+        start_col: The starting column index of the merge region.
+        end_row: The ending row index of the merge region.
+        end_col: The ending column index of the merge region.
+
+    Returns:
+        True if the merge was successful, False otherwise.
+    """
+    try:
+        # Basic bounds checking
+        if not (0 <= start_row <= end_row < len(table.rows) and 0 <= start_col <= end_col < len(table.columns)):
+            print(f"Error: Merge region ({start_row},{start_col}) to ({end_row},{end_col}) is out of bounds.")
+            return False
+
+        start_cell = table.cell(start_row, start_col)
+        end_cell = table.cell(end_row, end_col)
+
+        start_cell.merge(end_cell)
+        print(f"Successfully merged cells from ({start_row},{start_col}) to ({end_row},{end_col}).")
+        return True
+
+    except Exception as e:
+        # python-docx can raise ValueError for invalid merges (e.g., if region isn't rectangular)
+        print(f"Error merging cells: {e}")
+        return False
 
 # --- Helper for Scope Resolution ---
 

@@ -206,8 +206,12 @@ from smartdoc_agent.utils.document_utils import (
 )
 # Import the new find_and_replace handler
 from smartdoc_agent.utils.document_utils import apply_find_and_replace_action
-# Import the new add_table utility
-from smartdoc_agent.utils.document_utils import add_table
+# Import the new add_table utility and other table utils
+from smartdoc_agent.utils.document_utils import (
+    add_table,
+    format_table_cell,
+    merge_table_cells
+)
 
 
 @tool
@@ -295,6 +299,128 @@ def create_table(tool_input: str | dict) -> str:
         print(f"Tool Error: {error_message}") # Log full error server-side
         return json.dumps({"status": "error", "message": error_message})
 
+@tool
+def format_table_cell_tool(tool_input: str | dict) -> str:
+    """
+    Formats a single cell in a table within a .docx document.
+    Input must be a dictionary (or JSON string) with required keys:
+    - 'doc_path': str, path to the input document.
+    - 'output_doc_path': str, path to save the modified document.
+    - 'table_index': int, the 0-based index of the table to modify.
+    - 'row': int, the 0-based row index of the cell.
+    - 'col': int, the 0-based column index of the cell.
+    And at least one of the optional formatting keys:
+    - 'text': str, new text for the cell.
+    - 'font_name': str, e.g., 'Calibri'.
+    - 'font_size': float, e.g., 12.
+    - 'bold': bool.
+    - 'italic': bool.
+    - 'underline': bool.
+    - 'alignment': str, e.g., 'CENTER', 'LEFT'.
+    - 'shading': str, hex color, e.g., 'C0C0C0'.
+    Returns a JSON string with 'status' and 'message'.
+    """
+    tool_name = "format_table_cell" # Renamed for clarity in logs
+    if isinstance(tool_input, str):
+        try:
+            args = json.loads(tool_input)
+        except json.JSONDecodeError:
+            return json.dumps({"status": "error", "message": f"Invalid JSON string input for {tool_name}."})
+    else:
+        args = tool_input
+
+    doc_path = args.get("doc_path")
+    output_doc_path = args.get("output_doc_path")
+    table_index = args.get("table_index")
+    row = args.get("row")
+    col = args.get("col")
+
+    if not all(x is not None for x in [doc_path, output_doc_path, table_index, row, col]):
+        return json.dumps({"status": "error", "message": "Missing required arguments. Need doc_path, output_doc_path, table_index, row, and col."})
+
+    try:
+        doc = load_document(doc_path)
+        if not (0 <= table_index < len(doc.tables)):
+            return json.dumps({"status": "error", "message": f"Table index {table_index} is out of bounds."})
+
+        table = doc.tables[table_index]
+
+        success = format_table_cell(
+            table=table,
+            row=row,
+            col=col,
+            text=args.get("text"),
+            font_name=args.get("font_name"),
+            font_size=args.get("font_size"),
+            bold=args.get("bold"),
+            italic=args.get("italic"),
+            underline=args.get("underline"),
+            alignment=args.get("alignment"),
+            shading=args.get("shading")
+        )
+
+        if success:
+            save_document(doc, output_doc_path)
+            return json.dumps({"status": "success", "message": f"Cell ({row},{col}) in table {table_index} formatted successfully."})
+        else:
+            return json.dumps({"status": "error", "message": f"Failed to format cell ({row},{col}) in table {table_index}."})
+
+    except FileNotFoundError:
+        return json.dumps({"status": "error", "message": f"Input document not found at {doc_path}."})
+    except Exception as e:
+        return json.dumps({"status": "error", "message": f"Error in {tool_name}: {e}"})
+
+@tool
+def merge_table_cells_tool(tool_input: str | dict) -> str:
+    """
+    Merges a rectangular region of cells in a table within a .docx document.
+    Input must be a dictionary (or JSON string) with required keys:
+    - 'doc_path': str, path to the input document.
+    - 'output_doc_path': str, path to save the modified document.
+    - 'table_index': int, the 0-based index of the table to modify.
+    - 'start_row': int, the starting row index of the merge region.
+    - 'start_col': int, the starting column index of the merge region.
+    - 'end_row': int, the ending row index of the merge region.
+    - 'end_col': int, the ending column index of the merge region.
+    Returns a JSON string with 'status' and 'message'.
+    """
+    tool_name = "merge_table_cells" # Renamed for clarity
+    if isinstance(tool_input, str):
+        try:
+            args = json.loads(tool_input)
+        except json.JSONDecodeError:
+            return json.dumps({"status": "error", "message": f"Invalid JSON string input for {tool_name}."})
+    else:
+        args = tool_input
+
+    doc_path = args.get("doc_path")
+    output_doc_path = args.get("output_doc_path")
+    table_index = args.get("table_index")
+    start_row, start_col = args.get("start_row"), args.get("start_col")
+    end_row, end_col = args.get("end_row"), args.get("end_col")
+
+    if not all(x is not None for x in [doc_path, output_doc_path, table_index, start_row, start_col, end_row, end_col]):
+        return json.dumps({"status": "error", "message": "Missing required arguments for merge_table_cells."})
+
+    try:
+        doc = load_document(doc_path)
+        if not (0 <= table_index < len(doc.tables)):
+            return json.dumps({"status": "error", "message": f"Table index {table_index} is out of bounds."})
+
+        table = doc.tables[table_index]
+
+        success = merge_table_cells(table, start_row, start_col, end_row, end_col)
+
+        if success:
+            save_document(doc, output_doc_path)
+            return json.dumps({"status": "success", "message": f"Cells in table {table_index} merged successfully."})
+        else:
+            return json.dumps({"status": "error", "message": f"Failed to merge cells in table {table_index}."})
+
+    except FileNotFoundError:
+        return json.dumps({"status": "error", "message": f"Input document not found at {doc_path}."})
+    except Exception as e:
+        return json.dumps({"status": "error", "message": f"Error in {tool_name}: {e}"})
 
 @tool
 def apply_contextual_formatting(tool_input: str | dict) -> str:
