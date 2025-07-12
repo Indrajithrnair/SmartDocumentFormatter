@@ -1,7 +1,8 @@
-import re # Moved import to top
+import re
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.table import Table # Added for type hinting Table object
 
 # --- Document Load/Save Utilities ---
 
@@ -145,13 +146,78 @@ if __name__ == '__main__':
                 first_run = item['runs'][0]
                 print(f"  First run font: {first_run.get('font_name', 'N/A')}, Size: {first_run.get('font_size', 'N/A')}, Bold: {first_run.get('bold', 'N/A')}")
 
-    # Clean up the dummy file
+    # This is for basic testing of the utility functions.
+    # You would need a sample .docx file named 'sample.docx' in the same directory.
+    # Create a dummy document for testing if 'sample.docx' doesn't exist
+    doc_main = Document() # Renamed to avoid conflict with 'doc' in add_table test
+    doc_main.add_heading('Test Document', level=0)
+    doc_main.add_paragraph('This is a test paragraph.')
+    doc_main.add_heading('Heading 1', level=1)
+    doc_main.add_paragraph('Another paragraph under Heading 1.')
+    doc_main.add_heading('Heading 2', level=2)
+    doc_main.add_paragraph('Paragraph under Heading 2.')
+    save_document(doc_main, 'sample_test_doc.docx')
+
+    print("Testing with 'sample_test_doc.docx'")
+    loaded_doc = load_document('sample_test_doc.docx')
+
+    print("\nExtracted Paragraph Texts:")
+    texts = extract_text_from_paragraphs(loaded_doc)
+    for text in texts:
+        print(f"- {text}")
+
+    print("\nExtracted Headings:")
+    headings_info = extract_headings(loaded_doc)
+    for heading in headings_info:
+        print(f"- Level {heading['level']}: {heading['text']}")
+
+    print("\nDetailed Document Analysis:")
+    detailed_analysis_data = get_document_analysis(loaded_doc) # Use the loaded_doc directly
+    for item in detailed_analysis_data["elements"]:
+        print(f"- Type: {item['type']}")
+        if item['type'] == 'heading':
+            print(f"  Level: {item['level']}")
+        print(f"  Text: {item['text'][:50]}...") # Print first 50 chars
+        if 'style_name' in item: # Corrected from 'style' to 'style_name' for consistency
+            print(f"  Style: {item['style_name']}")
+        if 'runs' in item:
+            if item['runs']:
+                first_run = item['runs'][0]
+                print(f"  First run font: {first_run.get('font_name', 'N/A')}, Size: {first_run.get('font_size', 'N/A')}, Bold: {first_run.get('bold', 'N/A')}")
+
+    # Test add_table
+    print("\n--- Testing add_table utility ---")
+    doc_for_table_test = Document()
+    doc_for_table_test.add_paragraph("Paragraph before table.")
+    table_data = [["Name", "Role"], ["Jules", "Agent"], ["User", "Supervisor"]]
+    created_table = add_table(doc_for_table_test, rows=3, cols=2, data=table_data, style="Table Grid")
+
+    if created_table:
+        print(f"Test table created with style: {created_table.style.name if created_table.style else 'Default'}")
+        # Basic check of table content
+        if len(created_table.rows) == 3 and len(created_table.columns) == 2:
+            print(f"  Cell (0,0): {created_table.cell(0,0).text}")
+            print(f"  Cell (1,1): {created_table.cell(1,1).text}")
+        else:
+            print("  Error: Table dimensions mismatch after creation.")
+    else:
+        print("Test table creation FAILED.")
+    doc_for_table_test.add_paragraph("Paragraph after table.")
+
+    save_document(doc_for_table_test, 'sample_test_doc_with_table.docx')
+    print("Saved 'sample_test_doc_with_table.docx' for manual inspection.")
+
+    # Clean up the dummy files
     import os
-    os.remove('sample_test_doc.docx')
-    print("\nCleaned up sample_test_doc.docx")
+    if os.path.exists('sample_test_doc.docx'):
+        os.remove('sample_test_doc.docx')
+        print("\nCleaned up sample_test_doc.docx")
+    if os.path.exists('sample_test_doc_with_table.docx'):
+        os.remove('sample_test_doc_with_table.docx')
+        print("Cleaned up sample_test_doc_with_table.docx")
 
 # --- Element Analysis Utilities ---
-# (Duplicated block of get_run_details, get_paragraph_details, get_document_analysis removed from here)
+# (This comment indicates the end of the __main__ block and start of next section)
 
 # --- Low-Level Formatting Utilities ---
 
@@ -190,6 +256,59 @@ def set_paragraph_alignment_properties(paragraph, alignment: str = None): # alig
                 print(f"Warning: Invalid alignment value '{alignment}'. Skipping.")
         except Exception as e:
             print(f"Warning: Exception setting alignment '{alignment}': {e}")
+
+# --- Table Utilities ---
+
+def add_table(doc: Document, rows: int, cols: int, data: list[list[str]] = None, style: str = None) -> Table | None:
+    """
+    Adds a new table to the document.
+
+    Args:
+        doc: The python-docx Document object.
+        rows: Number of rows for the table.
+        cols: Number of columns for the table.
+        data: Optional list of lists of strings to populate the table cells.
+              If data dimensions don't match rows/cols, it fills what it can.
+        style: Optional name of the table style to apply (e.g., 'Light Shading Accent 1', 'Table Grid').
+
+    Returns:
+        The created python-docx.table.Table object, or None if creation fails.
+    """
+    # Robust type check for Document object due to potential import issues in test environments
+    if not (hasattr(doc, 'add_table') and type(doc).__name__ == 'Document' and doc.__class__.__module__.startswith('docx.document')):
+        print(f"Error: Invalid Document object provided to add_table. Type was {type(doc).__name__} from module {doc.__class__.__module__}.")
+        return None
+    if not (isinstance(rows, int) and rows > 0 and isinstance(cols, int) and cols > 0):
+        print(f"Error: Invalid rows ({rows}) or cols ({cols}) for add_table. Must be positive integers.")
+        return None
+
+    print(f"Attempting to add table with {rows} rows, {cols} cols. Style: {style}")
+    try:
+        table = doc.add_table(rows=rows, cols=cols)
+
+        if style:
+            try:
+                table.style = style
+                print(f"Applied table style: {style}")
+            except Exception as e: # python-docx might raise if style is truly bad, or just apply default
+                print(f"Warning: Could not apply table style '{style}'. It might be invalid or not available. Error: {e}")
+
+        if data:
+            print("Populating table with provided data.")
+            for i in range(rows):
+                if i < len(data): # If there's data for this row
+                    row_data = data[i]
+                    for j in range(cols):
+                        if j < len(row_data): # If there's data for this cell in the current row_data
+                            table.cell(i, j).text = str(row_data[j]) # Ensure data is string
+                        # else: cell remains empty if data[i] is shorter than cols
+                # else: row remains empty if data is shorter than rows
+
+        print(f"Table added successfully.")
+        return table
+    except Exception as e:
+        print(f"Error creating table in add_table: {e}")
+        return None
 
 # --- Helper for Scope Resolution ---
 
@@ -396,3 +515,76 @@ def apply_fix_font_inconsistencies_action(doc: Document, elements_details: list,
                 changed_elements_count +=1 # Count runs changed
 
     print(f"Applied font inconsistency fix to {changed_elements_count} runs within scope '{scope}'.")
+
+
+if __name__ == '__main__':
+    # This is for basic testing of the utility functions.
+    # You would need a sample .docx file named 'sample.docx' in the same directory.
+    # Create a dummy document for testing if 'sample.docx' doesn't exist
+    doc_main = Document() # Renamed to avoid conflict with 'doc' in add_table test
+    doc_main.add_heading('Test Document', level=0)
+    doc_main.add_paragraph('This is a test paragraph.')
+    doc_main.add_heading('Heading 1', level=1)
+    doc_main.add_paragraph('Another paragraph under Heading 1.')
+    doc_main.add_heading('Heading 2', level=2)
+    doc_main.add_paragraph('Paragraph under Heading 2.')
+    save_document(doc_main, 'sample_test_doc.docx')
+
+    print("Testing with 'sample_test_doc.docx'")
+    loaded_doc = load_document('sample_test_doc.docx')
+
+    print("\nExtracted Paragraph Texts:")
+    texts = extract_text_from_paragraphs(loaded_doc)
+    for text in texts:
+        print(f"- {text}")
+
+    print("\nExtracted Headings:")
+    headings_info = extract_headings(loaded_doc)
+    for heading in headings_info:
+        print(f"- Level {heading['level']}: {heading['text']}")
+
+    print("\nDetailed Document Analysis:")
+    detailed_analysis_data = get_document_analysis(loaded_doc) # Use the loaded_doc directly
+    for item in detailed_analysis_data["elements"]:
+        print(f"- Type: {item['type']}")
+        if item['type'] == 'heading':
+            print(f"  Level: {item['level']}")
+        print(f"  Text: {item['text'][:50]}...") # Print first 50 chars
+        if 'style_name' in item: # Corrected from 'style' to 'style_name' for consistency
+            print(f"  Style: {item['style_name']}")
+        if 'runs' in item:
+            if item['runs']:
+                first_run = item['runs'][0]
+                print(f"  First run font: {first_run.get('font_name', 'N/A')}, Size: {first_run.get('font_size', 'N/A')}, Bold: {first_run.get('bold', 'N/A')}")
+
+    # Test add_table
+    print("\n--- Testing add_table utility ---")
+    doc_for_table_test = Document()
+    doc_for_table_test.add_paragraph("Paragraph before table.")
+    table_data = [["Name", "Role"], ["Jules", "Agent"], ["User", "Supervisor"]]
+    created_table = add_table(doc_for_table_test, rows=3, cols=2, data=table_data, style="Table Grid")
+
+    if created_table:
+        print(f"Test table created with style: {created_table.style.name if created_table.style else 'Default'}")
+        # Basic check of table content
+        if hasattr(created_table, 'rows') and hasattr(created_table, 'columns') and \
+           len(created_table.rows) == 3 and len(created_table.columns) == 2:
+            print(f"  Cell (0,0): {created_table.cell(0,0).text}")
+            print(f"  Cell (1,1): {created_table.cell(1,1).text}")
+        else:
+            print("  Error: Table dimensions mismatch or table object incomplete after creation.")
+    else:
+        print("Test table creation FAILED.")
+    doc_for_table_test.add_paragraph("Paragraph after table.")
+
+    save_document(doc_for_table_test, 'sample_test_doc_with_table.docx')
+    print("Saved 'sample_test_doc_with_table.docx' for manual inspection.")
+
+    # Clean up the dummy files
+    import os
+    if os.path.exists('sample_test_doc.docx'):
+        os.remove('sample_test_doc.docx')
+        print("\nCleaned up sample_test_doc.docx")
+    if os.path.exists('sample_test_doc_with_table.docx'):
+        os.remove('sample_test_doc_with_table.docx')
+        print("Cleaned up sample_test_doc_with_table.docx")
